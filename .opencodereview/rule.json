@@ -1,0 +1,12 @@
+{
+  "include": [
+    "**/*.{js,mjs}"
+  ],
+  "rules": [
+    {
+      "path": "**/*.{js,mjs}",
+      "merge_system_rule": true,
+      "rule": "【v1 · 2026-10-06】dsh-restart（DSH 宿主插件·重启与唤醒）审查清单（错题本式，素材＝2026-10-05/06 建这个插件时真实踩的坑）\n口径：只报改动代码及其可达上下文里很可能为真的缺陷；每条给 文件:行 + 触发条件 + 置信度；不报格式化。\n\n零、宿主契约（全部实测）\n- defineTool 必须给 output: { schema, render } —— 缺了会抛 `Cannot read properties of undefined (reading 'render')`，而且**注册失败是静默的**（工具不出现、没有报错）。\n- 暴露服务要用 `ctx.provide(name, value)`；`ctx.set(name, value)` 会抛 `cannot set property \"x\" without provide`。\n- 插件 Config 读值必须**逐字段解包**：整包 unvolatile 之后字段仍可能是对象 ⇒ `x === true` 永不成立（本例 wakeOnStart 就这样静默失效过）。\n- 工具注册回调（ctx.inject(['tools'], cb)）必须整段 try/catch + 分步诊断 —— 否则 cb 内抛错被吞，表现为「工具没出现且没有任何日志」。\n- profile 下 node_modules/<插件> 是**独立副本**：改完必须 Copy-Item + 比对哈希 + 重启；任何「已修复」结论都要有哈希证据。\n- 同步脚本必须写成「node --check 不通过就**不**复制」——本插件曾把语法错误的文件同步进运行时。\n\n一、重启类操作的安全边界（本插件的存在意义）\n- 重启脚本不存在 ⇒ 必须**拒绝重启**并如实报错，不许半途而废。\n- 必须**先落盘唤醒清单**再起脚本；脚本要能脱离本进程（本例用 WMI 分离拉起）。\n- 唤醒一律走**官方通道**按会话**原有预设**（resolveAgent），**绝不改预设、不换面**——换面会让会话永久 400。\n- 通知/唤醒用宿主 notice 形态的消息（role=user + source.kind=插件名 + form=notice），**不要**伪造用户发言。\n- 不改任何配置与工具面；做不到的事（脚本缺失/权限不足/端口被占）如实说，最坏情况退回人工启动。\n\n二、工具提示词\n- 破坏性工具（重启/删除/覆盖）的描述里必须写清：会中断什么、调用前要确认什么、没有把握时先问用户。"
+    }
+  ]
+}

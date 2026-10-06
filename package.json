@@ -1,0 +1,77 @@
+{
+  "name": "dsh-restart",
+  "version": "0.1.0",
+  "description": "DSH 插件：把「重启宿主」做成可调用工具，并在重启后自动把指定会话唤醒。",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "scripts",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.0",
+    "@deepseek-ai/schemastery": "^3.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    },
+    "@deepseek-ai/schemastery": {
+      "optional": true
+    }
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    },
+    "compatibility": {
+      "dsh": ">=0.2.0-rc.1",
+      "dshReleases": {
+        "0.2.0-rc.2": "compatible"
+      }
+    }
+  },
+  "dshhub": {
+    "schemaVersion": 1,
+    "displayName": "重启插件",
+    "summary": "把「重启 DSH 宿主」做成 agent 可调的工具和侧边栏按钮，重启后按会话原有预设自动唤醒它。",
+    "categories": [
+      "运维",
+      "宿主"
+    ],
+    "surfaces": [
+      "host",
+      "web"
+    ],
+    "capabilities": {
+      "provides": [
+        "tool:dsh_restart"
+      ]
+    },
+    "compatibility": {
+      "dsh": ">=0.2.0-rc.1",
+      "node": ">=22"
+    }
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "restart",
+    "reload"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  }
+}

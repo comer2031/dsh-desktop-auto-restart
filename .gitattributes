@@ -1,0 +1,4 @@
+* text=auto eol=lf
+# .bat/.cmd 必须 CRLF：cmd.exe 对 LF 批处理的括号块是已知雷区
+*.bat text eol=crlf
+*.cmd text eol=crlf

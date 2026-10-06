@@ -1,0 +1,4 @@
+# 重启插件（dsh-restart）的 bundle patch：只负责把自己插进插件树。
+- insert:
+    - id: dsh-restart
+      name: dsh-restart
