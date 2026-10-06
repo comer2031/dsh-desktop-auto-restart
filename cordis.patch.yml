@@ -1,4 +1,5 @@
-# 重启插件（dsh-restart）的 bundle patch：只负责把自己插进插件树。
+# 重启插件（dsh-desktop-auto-restart）的 bundle patch：只负责把自己插进插件树。
+# id 是插件在树里的标识（保持不变）；name 是**模块名**，必须与安装后的包名一致。
 - insert:
     - id: dsh-restart
-      name: dsh-restart
+      name: dsh-desktop-auto-restart

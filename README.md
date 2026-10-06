@@ -1,4 +1,4 @@
-# dsh-restart（重启插件）
+# dsh-desktop-auto-restart（重启插件）
 
 给 DSH 加一个「重启宿主」的工具和一个侧边栏按钮；**重启后自动把指定会话唤醒**，让它接着干。
 
@@ -23,7 +23,7 @@
 ## 安装
 
 1. 让 profile 能找到这个包：把本目录放进 `<profile>/node_modules/`，或在 `<profile>/package.json` 的 `dependencies` 里用 `file:` 路径／包名指向它。
-2. 在 `<profile>/package.json` 的 `dsh.profile.bundles` 数组里加上 `dsh-restart`。
+2. 在 `<profile>/package.json` 的 `dsh.profile.bundles` 数组里加上 `dsh-desktop-auto-restart`。
 3. 重启 DSH。
 
 （`<profile>` 默认在 `~/.dsh/profiles/<profile 名>`。）
@@ -61,7 +61,7 @@ DSH 的「设置」里会多一个**「重启」**分节（DSH 0.2 的标准做�
 2. **重启脚本**：按端口找到后端 host → 校验它的 exe 在安装目录下（不在就放弃）→ 先伪造系统会话结束、请它优雅退出，超时（默认 8 秒）才强杀这两个精确 PID → 等端口释放 → 再用原 exe 经 WMI 拉起来 → 等端口重新监听。
 3. **重启后**：插件启动时若清单未过期，就每 4 秒重试唤醒（最多 30 次）；全部成功才清清单，否则保留给下次启动。
 4. **繁忙判定**：有正在跑的会话／有排队消息／有 running 或 stopping 的后台任务／有已武装的定时提醒 ⇒ 算繁忙。取不到 `agents`、`jobs` 服务，或判定过程抛错 ⇒ 一律当繁忙（宁可不重启）。
-5. **UI 端点门禁**：只接受「来自回环地址 + 带自定义请求头 `x-dsh-restart` + `Origin` 与 `Host` 同源」的 POST —— 自定义头让跨源请求先触发浏览器预检，而宿主不给 CORS 放行 ⇒ 外部网页没法偷偷触发重启。（自定义头不是密码，挡的是浏览器，不是本机上的其它程序。）
+5. **UI 端点门禁**：只接受「来自回环地址 + 带自定义请求头 `x-dsh-desktop-auto-restart` + `Origin` 与 `Host` 同源」的 POST —— 自定义头让跨源请求先触发浏览器预检，而宿主不给 CORS 放行 ⇒ 外部网页没法偷偷触发重启。（自定义头不是密码，挡的是浏览器，不是本机上的其它程序。）
 6. **结果回读与并发闸门**：脚本每次运行都把结果写进数据目录下的 `restart-last-result.json`（先 `running`，再 `ok`/`failed`）；工具拉起脚本后最多等 6 秒 —— 脚本若当场拒绝（端口上没有宿主进程、exe 不在安装目录……），工具**如实报失败并撤掉待唤醒清单**；等不到结果说明它在正常干活（成功路径要几十秒）。另外，一次重启被拉起后的 60 秒内不接受第二次请求，避免连点造成双实例。
 
 ## 目录结构
@@ -80,7 +80,7 @@ scripts/restart-desktop.bat  转发入口（把参数传给 ps1）
 - 安装目录默认是 `%LOCALAPPDATA%\Programs\DeepSeek Harness`；装在别处会被脚本的安全校验拒绝 —— 把配置项 `installRoot` 指到实际目录即可。
 - 重启始终失败时（脚本缺失、权限不足、端口被占），只能人工启动一次。
 - 唤醒依赖宿主既有的会话恢复能力；宿主起不来就谈不上唤醒。
-- 工具回执只能覆盖「脚本有没有被拉起」和「脚本头几秒有没有拒绝」；脚本中途失败（例如强杀失败、端口没释放）只会体现在 `restart-last-result.json` 与 `%TEMP%\dsh-restart-desktop.log` 里 —— 那时工具早已返回。
+- 工具回执只能覆盖「脚本有没有被拉起」和「脚本头几秒有没有拒绝」；脚本中途失败（例如强杀失败、端口没释放）只会体现在 `restart-last-result.json` 与 `%TEMP%\dsh-desktop-auto-restart-desktop.log` 里 —— 那时工具早已返回。
 
 ## 许可证
 

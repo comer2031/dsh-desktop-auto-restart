@@ -1,5 +1,5 @@
 {
-  "name": "dsh-restart",
+  "name": "dsh-desktop-auto-restart",
   "version": "0.1.0",
   "description": "DSH 插件：把「重启宿主」做成可调用工具，并在重启后自动把指定会话唤醒。",
   "type": "module",
