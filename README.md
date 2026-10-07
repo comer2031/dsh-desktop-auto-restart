@@ -24,11 +24,13 @@
 
 ## 安装
 
-发布到 npm 后，用 DSH 自带的 CLI 一条命令装（装完重启 DSH 生效）：
+包在 npm 上，名字就是 `dsh-desktop-auto-restart`。用 DSH 自带的 CLI 一条命令装（装完重启 DSH 生效）：
 
 ```sh
 dsh plugin --profile <profile 名> add dsh-desktop-auto-restart
 ```
+
+（`npm i dsh-desktop-auto-restart` 只是把包装进当前目录，**DSH 插件要按上面那条 CLI 装**才生效。）
 
 手动装（等同上面这条做的事）：
 
