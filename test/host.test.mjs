@@ -48,12 +48,13 @@ const staged = stage()
 function harness(config = {}) {
   const seen = { tools: [], routes: [], services: {}, edits: [], followups: [], resolved: [] }
   const agents = new Map()
-  const state = { running: false, queued: false, jobRunning: false, schedule: false, noServices: false, configEditor: true }
+  const state = { running: false, runningIds: [], queued: false, jobRunning: false, schedule: false, noServices: false, configEditor: true }
   const tools = { register: (def) => seen.tools.push(def) }
   const webServer = { register: (route) => seen.routes.push(route) }
   const agentsApi = {
     list: () => {
       const list = []
+      for (const id of state.runningIds) list.push({ id, status: 'running' })
       if (state.running) list.push({ id: 'session-a', status: 'running' })
       if (state.queued) list.push({ id: 'session-b', status: 'idle', inbox: { nextTurn: ['x'] } })
       return list
@@ -132,6 +133,30 @@ test('繁忙判定：有会话在跑就拒绝（工具无 force 参数）', asyn
   const out = await h.seen.tools[0].execute({ reason: 'r', sessionIds: 'session-a' })
   assert.equal(out.ok, false)
   assert.match(out.error, /繁忙/)
+})
+
+test('繁忙判定：调用方自己那个会话不算繁忙，别的会话在跑仍然拒绝', async () => {
+  const mod = await load()
+  // ① 只有调用方自己在跑 ⇒ 不算繁忙，直接走重启流程（演练）
+  let h = harness(cfg({ agentToolEnabled: true, dryRun: true }))
+  h.state.runningIds = ['session-a']
+  mod.apply(h.ctx, h.config)
+  let out = await h.seen.tools[0].execute({ reason: 'r', sessionIds: 'session-a' }, { agent: { id: 'session-a' } })
+  assert.equal(out.ok, true, JSON.stringify(out))
+  assert.equal(out.dryRun, true)
+  // ② 另有一个会话在跑 ⇒ 仍然拒绝
+  h = harness(cfg({ agentToolEnabled: true, dryRun: true }))
+  h.state.runningIds = ['session-a', 'session-b']
+  mod.apply(h.ctx, h.config)
+  out = await h.seen.tools[0].execute({ reason: 'r', sessionIds: 'session-a' }, { agent: { id: 'session-a' } })
+  assert.equal(out.ok, false)
+  assert.match(out.error, /繁忙/)
+  // ③ 没有调用方上下文（exec 缺失）⇒ 保持保守：自己那一轮也算繁忙
+  h = harness(cfg({ agentToolEnabled: true, dryRun: true }))
+  h.state.runningIds = ['session-a']
+  mod.apply(h.ctx, h.config)
+  out = await h.seen.tools[0].execute({ reason: 'r', sessionIds: 'session-a' })
+  assert.equal(out.ok, false)
 })
 
 test('服务不可用（判定不出来）也按繁忙拒绝', async () => {
