@@ -11,6 +11,8 @@
 - 重启脚本靠 PowerShell + WMI 分离进程、靠 user32 伪造系统会话结束 —— 非 Windows 平台没有这套东西。
 - 非桌面形态（例如浏览器版）没有可重启的 App，指定端口上找不到宿主进程，脚本会如实报「端口上没有监听进程」并退出。
 - 插件自己在非 Windows 平台会直接拒绝重启，不会半途而废、也不会静默失败。
+- **脚本能不能跑，取决于本机 PowerShell 执行策略**：需要允许本地脚本（`RemoteSigned` 即可）。Windows 客户端的默认策略可能是 `Restricted`，那种机器上脚本**根本不会被执行**，而 WMI 照样返回 rc=0 ⇒ 工具会报「脚本已拉起」却什么都没发生。修法：`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`（不需要管理员）。
+- **装了火绒等安全软件**时，重启会在它的「系统加固」里记一条 `WmiPrvSE.exe 触犯敏感动作防护规则`：用 WMI 建进程正是为了让重启器脱离 DSH 进程树，属于预期行为；对方的软件若设成询问模式会弹窗，放行即可。
 
 ## 功能
 
@@ -96,10 +98,10 @@ npm test        # host 半边的测试：自己造宿主桩，不需要装 DSH
 ## 限制
 
 - 重启**必然**中断本进程与正在跑的回合；「继续」由重启后的唤醒负责。
-- 安装目录默认是 `%LOCALAPPDATA%\Programs\DeepSeek Harness`；装在别处会被脚本的安全校验拒绝 —— 把配置项 `installRoot` 指到实际目录即可。
+- 安装目录通常**自动探测**（插件取自己进程 exe 所在目录，装在非默认位置也对）；探测不到才回落到脚本内置默认 `%LOCALAPPDATA%\Programs\DeepSeek Harness` —— 那种情况下装在别处会被脚本的安全校验拒绝，把配置项 `installRoot` 指到实际目录即可。
 - 重启始终失败时（脚本缺失、权限不足、端口被占），只能人工启动一次。
 - 唤醒依赖宿主既有的会话恢复能力；宿主起不来就谈不上唤醒。
-- 工具回执只能覆盖「脚本有没有被拉起」和「脚本头几秒有没有拒绝」；脚本中途失败（例如强杀失败、端口没释放）只会体现在 `restart-last-result.json` 与 `%TEMP%\dsh-desktop-auto-restart-desktop.log` 里 —— 那时工具早已返回。
+- 工具回执只能覆盖「脚本有没有被拉起」和「脚本头几秒有没有拒绝」；脚本中途失败（例如强杀失败、端口没释放）只会体现在 `restart-last-result.json` 与 `%TEMP%\dsh-restart-desktop.log` 里 —— 那时工具早已返回。
 
 ## 许可证
 
