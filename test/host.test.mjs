@@ -80,7 +80,7 @@ function harness(config = {}) {
   return { ctx, seen, state, agents, config }
 }
 
-const cfg = (over = {}) => ({ agentToolEnabled: false, wakeOnStart: true, wakeDelayMs: 0, pendingTtlMs: 600000, scriptPath: '', dryRun: true, desktopPort: 19387, installRoot: '', ...over })
+const cfg = (over = {}) => ({ agentToolEnabled: false, wakeOnStart: true, wakeDelayMs: 0, pendingTtlMs: 600000, scriptPath: '', dryRun: true, installRoot: '', ...over })
 
 async function load() { return await import(pathToFileURL(join(staged, 'lib', 'index.js')).href) }
 
@@ -105,6 +105,24 @@ const tick = (ms = 30) => new Promise((resolve) => setTimeout(resolve, ms))
 test('Config 默认值：agent 工具默认关', async () => {
   const { Config } = await load()
   assert.ok(Config.dict.agentToolEnabled, 'Config 应声明 agentToolEnabled')
+  assert.ok(Config.dict.desktopPort, '旧 patch 里的 desktopPort 仍要被接受（deprecated，不参与定位）')
+})
+
+test('脚本参数：传 -HostPid=process.pid，不再传 -Port', async () => {
+  const { restartScriptArgs } = await load()
+  const args = restartScriptArgs({
+    pid: process.pid,
+    delaySeconds: 10,
+    installRoot: 'C:\\Apps\\DeepSeek Harness',
+    resultFile: 'C:\\tmp\\r.json',
+  })
+  assert.ok(args.includes('-HostPid ' + process.pid), JSON.stringify(args))
+  assert.ok(args.includes('-DelaySeconds 10'))
+  assert.ok(args.some((a) => a.startsWith('-InstallRoot "')), JSON.stringify(args))
+  assert.ok(args.some((a) => a.startsWith('-ResultFile "')), JSON.stringify(args))
+  assert.equal(args.some((a) => a.startsWith('-Port')), false, '不得再传 -Port')
+  const noDelay = restartScriptArgs({ pid: 42, delaySeconds: 0, installRoot: '', resultFile: 'r.json' })
+  assert.equal(noDelay.some((a) => a.startsWith('-DelaySeconds')), false, '0 秒不加延迟参数')
 })
 
 test('工具开关关着 ⇒ 不注册 dsh_restart', async () => {
@@ -189,8 +207,8 @@ test('UI 端点门禁：缺自定义头 / 非回环 / 跨源 一律 403', async 
   const handler = h.seen.routes[0].handler
   for (const [label, r] of [
     ['缺头', req('POST', '/dsh-restart/api/restart', '{}', {})],
-    ['非回环', req('POST', '/dsh-restart/api/restart', '{}', { 'x-dsh-restart': '1' }, '10.0.0.9')],
-    ['跨源', req('POST', '/dsh-restart/api/restart', '{}', { 'x-dsh-restart': '1', origin: 'http://evil.example', host: '127.0.0.1:19387' })],
+    ['非回环', req('POST', '/dsh-restart/api/restart', '{}', { 'x-dsh-restart': '1' }, '192.0.2.9')],
+    ['跨源', req('POST', '/dsh-restart/api/restart', '{}', { 'x-dsh-restart': '1', origin: 'http://evil.example', host: '127.0.0.1:5000' })],
   ]) {
     const r2 = res()
     handler(r, r2)
@@ -210,7 +228,9 @@ test('设置面板：带头的同源 GET 拿到字段与状态（含自动探测
   const body = JSON.parse(r2.body)
   assert.equal(body.ok, true)
   assert.equal(body.fields.agentToolEnabled.value, false)
-  assert.equal(body.status.desktopPort, 19387)
+  assert.equal(body.status.hostPid, process.pid)
+  assert.equal('desktopPort' in body.fields, false, 'deprecated 字段不进设置表单')
+  assert.equal('desktopPort' in body.status, false, '状态行不再报端口')
   assert.equal(typeof body.status.installRootDetected, 'string')
 })
 
@@ -242,17 +262,17 @@ test('设置写入：类型不符的字段被拒并回报字段名，合法字�
   mod.apply(h.ctx, h.config)
   const handler = h.seen.routes[0].handler
   const bad = res()
-  handler(req('POST', '/dsh-restart/api/config', JSON.stringify({ patch: { desktopPort: 'abc' } }), { 'x-dsh-restart': '1' }), bad)
+  handler(req('POST', '/dsh-restart/api/config', JSON.stringify({ patch: { wakeDelayMs: 'abc' } }), { 'x-dsh-restart': '1' }), bad)
   await tick()
   assert.equal(bad.statusCode, 400)
-  assert.match(JSON.parse(bad.body).error, /desktopPort/)
+  assert.match(JSON.parse(bad.body).error, /wakeDelayMs/)
   const good = res()
-  handler(req('POST', '/dsh-restart/api/config', JSON.stringify({ patch: { agentToolEnabled: true, desktopPort: 19400, 未知键: 1 } }), { 'x-dsh-restart': '1' }), good)
+  handler(req('POST', '/dsh-restart/api/config', JSON.stringify({ patch: { agentToolEnabled: true, wakeDelayMs: 1200, 未知键: 1 } }), { 'x-dsh-restart': '1' }), good)
   await tick()
   assert.equal(good.statusCode, 200)
   assert.equal(h.seen.edits.length, 1)
   assert.deepEqual(h.seen.edits[0].agentToolEnabled, true)
-  assert.equal(h.seen.edits[0].desktopPort, 19400)
+  assert.equal(h.seen.edits[0].wakeDelayMs, 1200)
   assert.equal('未知键' in h.seen.edits[0], false, '未知键不能写进配置')
 })
 
