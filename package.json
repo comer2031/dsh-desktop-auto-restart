@@ -1,6 +1,6 @@
 {
   "name": "dsh-desktop-auto-restart",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "DSH 桌面端（Windows）重启插件：从侧边栏按钮或默认关闭的模型工具重启宿主，重启后按会话原有预设自动唤醒；宿主繁忙时拒绝重启。",
   "type": "module",
   "main": "lib/index.js",
@@ -50,7 +50,8 @@
       "dsh": ">=0.2.0-rc.1",
       "dshReleases": {
         "0.2.0-rc.2": "compatible",
-        "0.2.1-rc.1": "compatible"
+        "0.2.1-rc.1": "compatible",
+        "0.2.1-rc.2": "compatible"
       }
     }
   },
