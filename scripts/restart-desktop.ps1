@@ -8,10 +8,13 @@
        按命令行自动找 dsh-desktop-host 子进程；
     2. 先请求主窗口优雅关闭（等价于点 UI 的退出按钮，走同一套 before-quit）；
     3. 超过 -GracefulSeconds 还没退，才强制结束（只针对已确认的那两个 PID）；
-    4. 等后端 host 真正退出，再用 WMI Win32_Process.Create 重新拉起
+    4. 关掉主进程后**先等后端 host 自己退出**（最多 30 秒，留给它落盘会话日志）；
+       自己退了只记日志；超时才强杀，并显式警告「会话日志可能不完整」
+       （2026-10-22 改：以前固定等 800ms 就硬杀，可能丢掉尚未落盘的会话日志）；
+    5. 等后端 host 真正退出，再用 WMI Win32_Process.Create 重新拉起
        （父进程是 WmiPrvSE ⇒ 脱离调用方进程树，DSH 自己被杀也不影响重启）；
-    5. 新实例就绪的判据＝出现**新的 host 子进程**（不再看端口）；
-    6. 全过程写日志，事后可核对。
+    6. 新实例就绪的判据＝出现**新的 host 子进程**（不再看端口）；
+    7. 全过程写日志，事后可核对。
 
   用法：
     powershell -NoProfile -ExecutionPolicy Bypass -File restart-desktop.ps1 -DryRun
@@ -46,6 +49,9 @@ param(
 )
 
 $ErrorActionPreference = 'Continue'
+
+# 关闭主进程后先等后端 host **自己退出**的上限（秒）：留给它把会话日志落盘，超时才强杀。
+$HostWaitSeconds = 30
 
 function Write-Log([string]$Message) {
   $line = ('[{0}] {1}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Message)
@@ -268,7 +274,7 @@ if ($mainPath -ne '' -and -not (Test-UnderRoot $mainPath)) {
 
 if ($DryRun) {
   Write-Log 'DryRun：只报告计划，不做任何动作。'
-  Write-Log ('  计划：优雅策略 {0} → 关闭主进程 {1}（超时 {2}s 后强制），等后端 host PID {3} 退出，再用 WMI 重新拉起 {4}' -f $GracefulMode, $mainPid, $GracefulSeconds, $backendPid, $mainPath)
+  Write-Log ('  计划：优雅策略 {0} → 关闭主进程 {1}（超时 {2}s 后强制）→ 先等后端 host PID {3} 自行退出（最多 {5}s，超时才强杀并警告日志可能不完整）→ 再用 WMI 重新拉起 {4}' -f $GracefulMode, $mainPid, $GracefulSeconds, $backendPid, $mainPath, $HostWaitSeconds)
   Exit-With 0 'ok' 'DryRun：只报告计划，未做任何动作'
 }
 
@@ -310,11 +316,19 @@ if ($exited) {
   try { Stop-Process -Id $mainPid -Force -ErrorAction Stop; Write-Log '已强制结束主进程。' }
   catch { Exit-With 8 'failed' ('强制结束主进程 PID {0} 失败：{1} —— 中止，不再拉起新实例（否则会双开）' -f $mainPid, $_.Exception.Message) }
 }
-# 后端 host 是子进程，父进程退出不会带走它
-Start-Sleep -Milliseconds 800
-if (Get-Process -Id $backendPid -ErrorAction SilentlyContinue) {
-  try { Stop-Process -Id $backendPid -Force -ErrorAction Stop; Write-Log ('已结束后端 host PID {0}。' -f $backendPid) }
-  catch { Exit-With 9 'failed' ('结束后端 host PID {0} 失败：{1} —— 中止，不再拉起新实例（否则会双开）' -f $backendPid, $_.Exception.Message) }
+# 后端 host 是子进程，父进程退出不会带走它。
+# 先给它时间**自己退出**（会话日志靠退出路径落盘）；等满上限还没退才强杀，并显式警告日志可能不完整。
+if (-not (Test-ProcessAlive $backendPid)) {
+  Write-Log ('后端 host PID {0} 已随主进程自行退出（落盘完成）。' -f $backendPid)
+} else {
+  Write-Log ('先等后端 host PID {0} 自行退出（最多 {1} 秒，留给它落盘会话日志）…' -f $backendPid, $HostWaitSeconds)
+  if (Wait-ProcessGone $backendPid $hostWaitSeconds) {
+    Write-Log ('后端 host PID {0} 已自行退出（落盘完成）。' -f $backendPid)
+  } else {
+    Write-Log ('⚠️ 警告：后端 host PID {0} 等满 {1} 秒仍未自行退出 ⇒ 强制结束；**会话日志可能不完整**，请以磁盘上已落盘的部分为准。' -f $backendPid, $HostWaitSeconds)
+    try { Stop-Process -Id $backendPid -Force -ErrorAction Stop; Write-Log ('已强制结束后端 host PID {0}。' -f $backendPid) }
+    catch { Exit-With 9 'failed' ('结束后端 host PID {0} 失败：{1} —— 中止，不再拉起新实例（否则会双开）' -f $backendPid, $_.Exception.Message) }
+  }
 }
 
 # 5) 等后端 host 真正退出（不看端口：宿主端口是随机分配的）

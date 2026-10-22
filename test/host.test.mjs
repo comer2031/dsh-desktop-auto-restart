@@ -25,7 +25,7 @@ function stage() {
   const dir = join(work, 'plugin')
   mkdirSync(join(dir, 'lib'), { recursive: true })
   mkdirSync(join(dir, 'scripts'), { recursive: true })
-  cpSync(join(root, 'lib', 'index.js'), join(dir, 'lib', 'index.js'))
+  cpSync(join(root, 'lib'), join(dir, 'lib'), { recursive: true })
   cpSync(join(root, 'scripts'), join(dir, 'scripts'), { recursive: true })
   writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'dsh-desktop-auto-restart', type: 'module' }), 'utf8')
   const stub = (name, body) => {
@@ -101,11 +101,28 @@ function res() {
   return r
 }
 const tick = (ms = 30) => new Promise((resolve) => setTimeout(resolve, ms))
+/** 把清单清成「全部完成」：避免本测试留下的待唤醒清单被后面的 apply 当成真清单继续重试。 */
+function clearPendingFile() {
+  writeFileSync(join(process.env.DSH_HOME, 'restart-pending.json'), JSON.stringify({ schemaVersion: 2, sessions: [], done: true, doneAt: Date.now() }), 'utf8')
+}
 
-test('Config 默认值：agent 工具默认关', async () => {
+test('Config 默认值：agent 工具默认关、脚本窗口默认弹', async () => {
   const { Config } = await load()
   assert.ok(Config.dict.agentToolEnabled, 'Config 应声明 agentToolEnabled')
+  assert.ok(Config.dict.showScriptWindow, 'Config 应声明 showScriptWindow')
   assert.ok(Config.dict.desktopPort, '旧 patch 里的 desktopPort 仍要被接受（deprecated，不参与定位）')
+})
+
+test('脚本参数：showWindow=false 才加 -WindowStyle Hidden，true 则可见窗口', async () => {
+  const { restartShellCommand } = await load()
+  const base = { script: 'C:\Apps\重启 脚本.ps1', args: ['-HostPid 42', '-ResultFile "C:\tmp\r.json"'] }
+  const hidden = restartShellCommand({ ...base, showWindow: false })
+  assert.match(hidden, /^powershell -NoProfile -WindowStyle Hidden -File "/)
+  assert.ok(hidden.includes('-HostPid 42'))
+  const shown = restartShellCommand({ ...base, showWindow: true })
+  assert.equal(shown.includes('-WindowStyle Hidden'), false, '打开后不加隐藏参数')
+  assert.match(shown, /^powershell -NoProfile -File "/)
+  assert.equal(restartShellCommand({ script: 'x.ps1', args: [], showWindow: true }), 'powershell -NoProfile -File "x.ps1"')
 })
 
 test('脚本参数：传 -HostPid=process.pid，不再传 -Port', async () => {
@@ -199,7 +216,7 @@ test('空闲 + 演练模式 ⇒ 落清单但不真重启', async () => {
   assert.equal(pending.launcherPid, process.pid)
 })
 
-test('UI 端点门禁：缺自定义头 / 非回环 / 跨源 一律 403', async () => {
+test('UI 端点门禁：缺自定义头 / 非回环 / 跨源 / 代理头 一律 403', async () => {
   const mod = await load()
   const h = harness(cfg())
   mod.apply(h.ctx, h.config)
@@ -209,6 +226,9 @@ test('UI 端点门禁：缺自定义头 / 非回环 / 跨源 一律 403', async 
     ['缺头', req('POST', '/dsh-restart/api/restart', '{}', {})],
     ['非回环', req('POST', '/dsh-restart/api/restart', '{}', { 'x-dsh-restart': '1' }, '192.0.2.9')],
     ['跨源', req('POST', '/dsh-restart/api/restart', '{}', { 'x-dsh-restart': '1', origin: 'http://evil.example', host: '127.0.0.1:5000' })],
+    ['代理头 x-forwarded-for', req('POST', '/dsh-restart/api/restart', '{}', { 'x-dsh-restart': '1', 'x-forwarded-for': '203.0.113.5' })],
+    ['代理头 x-real-ip', req('POST', '/dsh-restart/api/restart', '{}', { 'x-dsh-restart': '1', 'x-real-ip': '203.0.113.5' })],
+    ['代理头 forwarded', req('POST', '/dsh-restart/api/restart', '{}', { 'x-dsh-restart': '1', forwarded: 'for=203.0.113.5' })],
   ]) {
     const r2 = res()
     handler(r, r2)
@@ -228,6 +248,7 @@ test('设置面板：带头的同源 GET 拿到字段与状态（含自动探测
   const body = JSON.parse(r2.body)
   assert.equal(body.ok, true)
   assert.equal(body.fields.agentToolEnabled.value, false)
+  assert.equal(body.fields.showScriptWindow.value, true, '脚本窗口默认弹（可用性优先）')
   assert.equal(body.status.hostPid, process.pid)
   assert.equal('desktopPort' in body.fields, false, 'deprecated 字段不进设置表单')
   assert.equal('desktopPort' in body.status, false, '状态行不再报端口')
@@ -336,6 +357,119 @@ test('唤醒：别的进程写的清单会走官方通道（resolveAgent）+ not
   assert.equal(msg.source.kind, 'dsh-restart')
   assert.equal(msg.source.form, 'notice')
   assert.match(msg.content[0].text, /已重启完成/)
+  const settled = JSON.parse(readFileSync(join(process.env.DSH_HOME, 'restart-pending.json'), 'utf8'))
+  assert.deepEqual(settled.sessions, [], '全部唤醒成功后才清清单')
+  assert.equal(settled.done, true)
+})
+
+test('唤醒：nextAttemptAt 没到就不唤，TTL 到点保留清单（不误清）', async () => {
+  const mod = await load()
+  const now = Date.now()
+  const diagFile = join(process.env.DSH_HOME, 'restart-debug.log')
+  const diagBefore = existsSync(diagFile) ? readFileSync(diagFile, 'utf8').length : 0
+  writeFileSync(join(process.env.DSH_HOME, 'restart-pending.json'), JSON.stringify({
+    schemaVersion: 2, requestedAt: now, launcherPid: process.pid + 1, reason: 'x',
+    sessions: ['session-a'], attempts: {}, nextAttemptAt: { 'session-a': now + 60000 }, done: [],
+  }), 'utf8')
+  const h = harness(cfg({ agentToolEnabled: true, wakeDelayMs: 0, pendingTtlMs: 600 }))
+  h.agents.set('session-a', { followup: (m) => { h.seen.followups.push(m) } })
+  mod.apply(h.ctx, h.config)
+  await tick(800)
+  assert.equal(h.seen.resolved.length, 0, '退避未到，官方通道都不该被调')
+  assert.equal(h.seen.followups.length, 0)
+  const pending = JSON.parse(readFileSync(join(process.env.DSH_HOME, 'restart-pending.json'), 'utf8'))
+  assert.deepEqual(pending.sessions, ['session-a'], '没唤醒成功，TTL 到了也只能保留清单')
+  assert.deepEqual(pending.done, [])
+  // 不能只读回测试自己写的文件（那是自证）：要证明唤醒循环**确实推进过**并走到 TTL 出口。
+  const diagTail = existsSync(diagFile) ? readFileSync(diagFile, 'utf8').slice(diagBefore) : ''
+  assert.match(diagTail, /唤醒清单已过 TTL/, '唤醒循环应跑到 TTL 出口；本次诊断：\n' + diagTail)
+  assert.match(diagTail, /session-a/, 'TTL 诊断应点名该会话；本次诊断：\n' + diagTail)
+  clearPendingFile()
+})
+
+test('唤醒失败退避：旧清单迁移成 v2，attempts=1、nextAttemptAt≈+5s，清单保留', async () => {
+  const mod = await load()
+  const now = Date.now()
+  writeFileSync(join(process.env.DSH_HOME, 'restart-pending.json'), JSON.stringify({
+    requestedAt: now, launcherPid: process.pid + 1, sessions: ['session-a'], reason: 'x',
+  }), 'utf8')
+  const h = harness(cfg({ agentToolEnabled: true, wakeDelayMs: 0, pendingTtlMs: 1500 }))
+  // 故意不放 agent ⇒ 拿不到可唤醒的 agent ⇒ 记一次失败
+  mod.apply(h.ctx, h.config)
+  await tick(500)
+  const pending = JSON.parse(readFileSync(join(process.env.DSH_HOME, 'restart-pending.json'), 'utf8'))
+  assert.equal(pending.schemaVersion, 2, '旧格式应被迁移落盘')
+  assert.deepEqual(pending.sessions, ['session-a'])
+  assert.equal(pending.attempts['session-a'], 1)
+  const delay = pending.nextAttemptAt['session-a'] - now
+  assert.ok(delay >= 4000 && delay <= 6000, '首次退避 5s ±20%，实际 ' + delay)
+  // 等 TTL 到点让循环自己收尾（别给测试进程留后台 timer）
+  await tick(1400)
+  const kept = JSON.parse(readFileSync(join(process.env.DSH_HOME, 'restart-pending.json'), 'utf8'))
+  assert.deepEqual(kept.sessions, ['session-a'], '没唤醒成功就不能清清单')
+  assert.equal(kept.attempts['session-a'], 1, 'TTL 内不会跳过退避重试')
+  clearPendingFile()
+})
+
+test('single-flight：连续 apply 两次只产生一份 followup（旧循环作废）', async () => {
+  const mod = await load()
+  writeFileSync(join(process.env.DSH_HOME, 'restart-pending.json'), JSON.stringify({
+    requestedAt: Date.now(), launcherPid: process.pid + 1, sessions: ['session-a'], reason: 'x',
+  }), 'utf8')
+  const h1 = harness(cfg({ agentToolEnabled: true, wakeDelayMs: 0 }))
+  h1.agents.set('session-a', { followup: (m) => { h1.seen.followups.push(m) } })
+  const h2 = harness(cfg({ agentToolEnabled: true, wakeDelayMs: 0 }))
+  h2.agents.set('session-a', { followup: (m) => { h2.seen.followups.push(m) } })
+  // 两次 apply 同步连着跑：两个 0 延迟 timer 都会排队，令牌保证只有一个循环推进。
+  mod.apply(h1.ctx, h1.config)
+  mod.apply(h2.ctx, h2.config)
+  for (let i = 0; i < 40 && h1.seen.followups.length + h2.seen.followups.length === 0; i++) await tick(25)
+  await tick(200)
+  assert.equal(h1.seen.followups.length + h2.seen.followups.length, 1, '同一份清单只能被唤醒一次')
+  clearPendingFile()
+})
+
+test('原子写残留：启动时清掉 restart-pending.json.tmp-*，别的 tmp 不碰', async () => {
+  const mod = await load()
+  const stale = join(process.env.DSH_HOME, 'restart-pending.json.tmp-999999')
+  const keep = join(process.env.DSH_HOME, 'restart-last-result.json.tmp-999999')
+  writeFileSync(stale, '{半截', 'utf8')
+  writeFileSync(keep, 'x', 'utf8')
+  const h = harness(cfg({ wakeOnStart: false }))
+  mod.apply(h.ctx, h.config)
+  assert.equal(existsSync(stale), false, '陈旧 tmp 应被清掉')
+  assert.equal(existsSync(keep), true, '只删清单自己的 tmp 前缀')
+  rmSync(keep, { force: true })
+})
+
+test('pendingTtlMs=0 回落默认 TTL：fresh 与循环同一口径（照常唤醒）', async () => {
+  const mod = await load()
+  writeFileSync(join(process.env.DSH_HOME, 'restart-pending.json'), JSON.stringify({
+    requestedAt: Date.now(), launcherPid: process.pid + 1, sessions: ['session-a'], reason: 'x',
+  }), 'utf8')
+  const h = harness(cfg({ agentToolEnabled: true, wakeDelayMs: 0, pendingTtlMs: 0 }))
+  h.agents.set('session-a', { followup: (m) => { h.seen.followups.push(m) } })
+  mod.apply(h.ctx, h.config)
+  for (let i = 0; i < 40 && h.seen.followups.length === 0; i++) await tick(25)
+  assert.equal(h.seen.followups.length, 1, 'TTL=0 应按默认 TTL 处理，不是「没过期」直接丢弃')
+  clearPendingFile()
+})
+
+test('自定义脚本指向 .bat 且无同名 .ps1 ⇒ 报错并撤掉清单（重启没发生）', async (t) => {
+  if (process.platform !== 'win32') { t.skip('WMI 路径仅 Windows'); return }
+  const mod = await load()
+  const root = join(work, 'fake-install')
+  mkdirSync(root, { recursive: true })
+  writeFileSync(join(root, 'DeepSeek Harness.exe'), 'x', 'utf8')
+  const bat = join(work, 'only-bat.bat')
+  writeFileSync(bat, '@echo off', 'utf8')
+  const h = harness(cfg({ agentToolEnabled: true, dryRun: false, installRoot: root, scriptPath: bat }))
+  mod.apply(h.ctx, h.config)
+  const out = await h.seen.services.dshRestart.run({ reason: 'r', sessionIds: ['session-a'] })
+  assert.equal(out.ok, false)
+  assert.match(out.error, /\.ps1/)
+  const pending = JSON.parse(readFileSync(join(process.env.DSH_HOME, 'restart-pending.json'), 'utf8'))
+  assert.deepEqual(pending.sessions, [], '重启没发生就必须撤掉清单')
 })
 
 // 跑完把临时目录清掉，别在 %TEMP% 里留垃圾
@@ -355,3 +489,43 @@ test('非 win32 平台直接拒绝重启（本测试在 Windows 上则跳过该�
     assert.equal(typeof service.status().agentToolEnabled, 'boolean')
   }
 })
+test('非 Windows：UI 端点同样 403（不只是重启）', async () => {
+  const mod = await load()
+  const h = harness(cfg())
+  mod.apply(h.ctx, h.config)
+  const real = process.platform
+  try {
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true, writable: true })
+    for (const [label, r] of [
+      ['面板', req('GET', '/dsh-restart/api/panel', undefined, { 'x-dsh-restart': '1' })],
+      ['重启', req('POST', '/dsh-restart/api/restart', '{}', { 'x-dsh-restart': '1' })],
+    ]) {
+      const r2 = res()
+      h.seen.routes[0].handler(r, r2)
+      await tick()
+      assert.equal(r2.statusCode, 403, label)
+      assert.match(JSON.parse(r2.body).error, /只支持 Windows/)
+    }
+    const out = await h.seen.services.dshRestart.run({ reason: 'r', sessionIds: [] })
+    assert.equal(out.ok, false)
+    assert.match(out.error, /只支持 Windows/)
+  } finally {
+    Object.defineProperty(process, 'platform', { value: real, configurable: true, writable: true })
+  }
+})
+
+test('拉起前 fail-fast：安装目录下没有 DeepSeek Harness.exe ⇒ 报错，不拉脚本、撤掉清单', async () => {
+  const mod = await load()
+  const h = harness(cfg({ agentToolEnabled: true, dryRun: false, installRoot: join(work, 'no-such-root') }))
+  mod.apply(h.ctx, h.config)
+  const out = await h.seen.services.dshRestart.run({ reason: 'r', sessionIds: ['session-a'] })
+  assert.equal(out.ok, false)
+  if (process.platform === 'win32') {
+    assert.match(out.error, /可执行文件/)
+    const pending = JSON.parse(readFileSync(join(process.env.DSH_HOME, 'restart-pending.json'), 'utf8'))
+    assert.deepEqual(pending.sessions, [], '失败要撤掉待唤醒清单（否则下次启动会误唤醒）')
+  } else {
+    assert.match(out.error, /只支持 Windows/)
+  }
+})
+
